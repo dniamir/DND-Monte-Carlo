@@ -14,17 +14,17 @@ def GetRollValue(roll, n):
         n: The number of times to repeat the simulation
 
     returns:
-        A 2D numpy array where rows correspond to the results of each dice roll,
-        and the columns corresond with a different simulation
+        An array where each element is the result of the dice roll
     """
+    n = int(n)
     if type(roll) == int:
-        return np.ones((1, n)) * roll
+        return np.ones(n) * roll
     elif len(roll) == 1:
-        return np.ones((1, n)) * int(roll)
+        return np.ones(n) * int(roll)
     else:
         roll = roll.upper()
         (die, val) = list(map(int, roll.split('D')))
-        return np.random.randint(1, val + 1, size=(die, n))
+        return sum(np.random.randint(1, val + 1, size=(die, n)))
 
 
 def MonteCarloAttack(actions, ac=14, n=1e3):
@@ -44,21 +44,37 @@ def MonteCarloAttack(actions, ac=14, n=1e3):
         final_damage: list of ints. The final damage done for each simulation
             iteration
     """
-    results = {}
     n = int(n)
-    final_val = np.zeros(n)
+    hit_success_damage = np.zeros(n)
+    hit_critical_damage = np.zeros(n)
 
     # Calculate Damage Assuming All Hits
     for action, roll in actions.items():
-        if action != 'hit':
-            results[action] = GetRollValue(roll, n)
-            for array in results[action]:
-                final_val = final_val + array
+
+        # Don't include the hit modifier
+        if action == 'hit':
+            continue
+
+        hit_success_damage += GetRollValue(roll, n)
+
+        # Don't include the proficiency bonus for a critical
+        if action == 'prof':
+            continue
+
+        # Roll again for a critical hit
+        hit_critical_damage += GetRollValue(roll, n)
 
     # Check for Hit
-    hit = np.random.randint(1, 21, size=n) + actions['hit']
-    hit = hit > ac
-    final_damage = final_val * hit
+    hit = GetRollValue('1D20', n)
+    hit_success = hit + actions['hit'] >= ac
+    hit_critical = hit == 20
+    hit_absolute_miss = hit != 0
+
+    # Tally up final damage
+    hit_success_damage_final = hit_success_damage * hit_success
+    hit_critical_damage_final = hit_critical_damage * hit_critical
+    final_damage = hit_success_damage_final + hit_critical_damage_final
+    final_damage *= hit_absolute_miss
 
     return final_damage
 
@@ -98,3 +114,40 @@ def PlotFrequencies(frequency_dict, label=None, **kwargs):
 
     plt.plot(values, frequencies, marker='o', markeredgecolor='black',
              label=label, **kwargs)
+
+
+def PlotAcDistribution(actions_list, acs, n, ignore_miss=True):
+    """Plots the Monte Carlo distribution results versus armor class
+
+    args:
+        actions_list: list of dictionaries, or a single dictionary. A dictionary
+            of all supplements for a given attack. Each key corresponds with
+            the name of an effect to stack (ie hunter's mark, longbow...). Each
+            value corresponds with the dice roll associated with the attack
+            (ie 1D6, 1D8, ...). One of the key-value pairs should be "hit" to
+            take into account your hit modifier.
+        acs: list of ints. Various armor classes to calculate the distributions
+            to.
+        n: int. Number of simulations to run.
+        ignore_miss: Bool. True if all attacks that result in a miss should be
+            ignored.
+    """
+    if isinstance(actions_list, dict):
+        actions_list = [actions_list]
+
+    for ac in acs:
+
+        sim_damage_results = 0
+
+        for actions in actions_list:
+            sim_damage_results += MonteCarloAttack(actions, ac, n=n)
+
+        if ignore_miss:
+            sim_damage_results = sim_damage_results[sim_damage_results > 0]
+
+        frequency_dict = ReturnFrequencies(sim_damage_results)
+
+        PlotFrequencies(frequency_dict, label=ac, markersize=3)
+
+        plt.legend(loc='best', title='Armour Class')
+        plt.grid(True)
